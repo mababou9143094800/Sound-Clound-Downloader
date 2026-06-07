@@ -225,22 +225,39 @@ def safe_name(s: str) -> str:
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", s).strip()[:180]
 
 
-def ffmpeg_download(stream_url: str, dest: Path, fmt: str) -> bool:
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+
+
+def ffmpeg_download(stream_url: str, dest: Path, fmt: str, proto: str = "hls") -> bool:
     if fmt == "wav":
         acodec = ["-vn", "-acodec", "pcm_s16le", "-ar", "44100"]
     elif fmt == "flac":
         acodec = ["-vn", "-acodec", "flac"]
     elif fmt == "mp3-320":
         acodec = ["-vn", "-acodec", "libmp3lame", "-b:a", "320k"]
-    else:  # mp3 natif (copy si possible)
+    else:
         acodec = ["-vn", "-acodec", "libmp3lame", "-b:a", "128k"]
 
-    cmd = ["ffmpeg", "-y", "-i", stream_url] + acodec + [str(dest)]
+    # Options communes
+    http_opts = ["-headers", f"User-Agent: {UA}\r\n"]
+
+    if proto == "hls":
+        # Les streams HLS (m3u8) ont besoin de ces options pour suivre les segments
+        hls_opts = [
+            "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+            "-allowed_extensions", "ALL",
+        ]
+        cmd = ["ffmpeg", "-y"] + hls_opts + http_opts + ["-i", stream_url] + acodec + [str(dest)]
+    else:
+        # Progressive : fichier MP3/AAC direct
+        cmd = ["ffmpeg", "-y"] + http_opts + ["-i", stream_url] + acodec + [str(dest)]
+
     result = subprocess.run(cmd, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=600)
     if result.returncode != 0:
-        err = (result.stderr or "")[-300:]
-        print(f"    ffmpeg ERREUR: {err}")
+        # Affiche seulement les 2 dernières lignes d'erreur utiles
+        lines = [l for l in (result.stderr or "").splitlines() if l.strip()]
+        print(f"    ffmpeg ERREUR: {' | '.join(lines[-2:])}")
     return result.returncode == 0
 
 
@@ -309,7 +326,7 @@ def download_track(
     print(f"    {mime} / {proto} -> {ext.upper()}")
 
     # 6. Download + convert
-    ok = ffmpeg_download(stream_url, dest, fmt)
+    ok = ffmpeg_download(stream_url, dest, fmt, proto)
     if ok:
         add_to_archive(archive, archive_key)
         archive_set.add(archive_key)
