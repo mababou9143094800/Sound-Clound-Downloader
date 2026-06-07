@@ -425,8 +425,15 @@ select option{background:#1a1a1a;color:var(--text)}
   border:1px solid var(--border);
   border-radius:10px;
   padding:14px 12px;text-align:center;
-  transition:border-color .3s;
+  transition:border-color .25s,transform .2s,box-shadow .2s;
+  cursor:pointer;user-select:none;
 }
+.stat:hover{
+  border-color:var(--border2);
+  transform:translateY(-3px);
+  box-shadow:0 8px 24px rgba(0,0,0,.4);
+}
+.stat:active{transform:translateY(-1px)}
 .stat-val{
   font-size:1.6rem;font-weight:700;
   background:linear-gradient(135deg,#fff,#aaa);
@@ -435,6 +442,39 @@ select option{background:#1a1a1a;color:var(--text)}
 .stat.s-ok .stat-val{background:linear-gradient(135deg,var(--ok),#00a86b);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .stat.s-err .stat-val{background:linear-gradient(135deg,var(--err),#cc0022);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .stat-lbl{font-size:.7rem;color:var(--text2);margin-top:4px;text-transform:uppercase;letter-spacing:.08em}
+.stat-hint{font-size:.62rem;color:#444;margin-top:5px}
+
+/* ── Track list modal ── */
+.tl-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.tl-title{font-size:1rem;font-weight:700;color:#fff}
+.tl-count{font-size:.78rem;color:var(--text2);background:rgba(255,255,255,.07);padding:3px 10px;border-radius:99px}
+.tl-search{
+  width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);
+  border-radius:8px;padding:9px 12px;color:var(--text);font-size:.84rem;
+  font-family:inherit;outline:none;margin-bottom:12px;
+  transition:border-color .2s;
+}
+.tl-search:focus{border-color:var(--accent)}
+.tl-search::placeholder{color:var(--text2)}
+.tl-list{
+  list-style:none;max-height:360px;overflow-y:auto;
+  border:1px solid var(--border);border-radius:8px;
+}
+.tl-list::-webkit-scrollbar{width:4px}
+.tl-list::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+.tl-item{
+  padding:9px 14px;font-size:.82rem;color:var(--text);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;
+  transition:background .15s;
+}
+.tl-item:last-child{border-bottom:none}
+.tl-item:hover{background:rgba(255,255,255,.04)}
+.tl-item .tl-num{color:#444;font-size:.72rem;min-width:28px;font-family:'Fira Code',monospace}
+.tl-empty{padding:24px;text-align:center;color:var(--text2);font-size:.84rem}
+.tl-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.tl-dot.ok{background:var(--ok)}
+.tl-dot.skip{background:#888}
+.tl-dot.err{background:var(--err)}
 
 /* ── Log ── */
 .log-wrap{
@@ -607,17 +647,20 @@ select option{background:#1a1a1a;color:var(--text)}
   </div>
 
   <div class="stats">
-    <div class="stat s-ok">
+    <div class="stat s-ok" onclick="showTrackList('ok')">
       <div class="stat-val" id="statOk">0</div>
       <div class="stat-lbl">Téléchargés</div>
+      <div class="stat-hint">cliquer pour voir</div>
     </div>
-    <div class="stat">
+    <div class="stat" onclick="showTrackList('skip')">
       <div class="stat-val" id="statSkip">0</div>
       <div class="stat-lbl">Déjà présents</div>
+      <div class="stat-hint">cliquer pour voir</div>
     </div>
-    <div class="stat s-err">
+    <div class="stat s-err" onclick="showTrackList('failed')">
       <div class="stat-val" id="statFail">0</div>
       <div class="stat-lbl">Erreurs</div>
+      <div class="stat-hint">cliquer pour voir</div>
     </div>
   </div>
 
@@ -637,6 +680,19 @@ select option{background:#1a1a1a;color:var(--text)}
   </div>
 
   <div class="log-wrap" id="log"></div>
+</div>
+
+<!-- Modal liste de tracks -->
+<div class="modal-overlay" id="tlOverlay" onclick="closeTL()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:600px">
+    <button class="modal-close" onclick="closeTL()">✕</button>
+    <div class="tl-header">
+      <span class="tl-title" id="tlTitle">Tracks</span>
+      <span class="tl-count" id="tlCount">0</span>
+    </div>
+    <input class="tl-search" id="tlSearch" type="text" placeholder="Rechercher un titre..." oninput="filterTL()">
+    <ul class="tl-list" id="tlList"></ul>
+  </div>
 </div>
 
 <!-- Modal aide -->
@@ -683,10 +739,88 @@ function showHelp(type) {
 function closeHelp() {
   document.getElementById('modalOverlay').classList.remove('open');
 }
-document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeHelp(); });
+document.addEventListener('keydown', function(e){ if(e.key==='Escape'){ closeHelp(); closeTL(); } });
 
 let evtSource = null;
 let done_val = 0, total_val = 0, ok_val = 0, skip_val = 0, fail_val = 0;
+
+// ── Track lists ─────────────────────────────────────────────────────────────
+const trackLists = { ok: [], skip: [], failed: [] };
+let currentTrackName = "";
+
+function recordTrack(msg) {
+  // Nom de la track courante depuis la ligne [X/Y]
+  if (msg.level === "track") {
+    const m = msg.text.match(/\[\d+\/\d+\]\s+(.*)/);
+    if (m) currentTrackName = m[1].trim();
+  }
+  // Telecharge OK — extrait le nom de fichier depuis "    OK: Artist - Title.wav"
+  if (msg.level === "ok" && msg.text.includes("OK:")) {
+    const m = msg.text.match(/OK:\s+(.+)/);
+    const name = m ? m[1].trim() : currentTrackName;
+    if (name) trackLists.ok.push(name);
+  }
+  // Deja present / deja telecharge
+  if (msg.text.includes("deja present") || msg.text.includes("deja telecharge")) {
+    if (currentTrackName) trackLists.skip.push(currentTrackName);
+  }
+  // Erreur
+  if (msg.level === "error" && currentTrackName &&
+      !msg.text.includes("Arret") && !msg.text.includes("rate-limit") &&
+      !msg.text.includes("attente")) {
+    if (!trackLists.failed.includes(currentTrackName))
+      trackLists.failed.push(currentTrackName);
+  }
+}
+
+function resetTrackLists() {
+  trackLists.ok = []; trackLists.skip = []; trackLists.failed = [];
+  currentTrackName = "";
+}
+
+// ── Track list modal ─────────────────────────────────────────────────────────
+const TL_CONFIG = {
+  ok:     { label: "Téléchargés",    dot: "ok",   color: "var(--ok)"  },
+  skip:   { label: "Déjà présents",  dot: "skip", color: "#888"       },
+  failed: { label: "Erreurs",        dot: "err",  color: "var(--err)" },
+};
+let tlCurrentType = "ok";
+
+function showTrackList(type) {
+  tlCurrentType = type;
+  const cfg = TL_CONFIG[type];
+  document.getElementById("tlTitle").textContent = cfg.label;
+  document.getElementById("tlSearch").value = "";
+  renderTL(trackLists[type]);
+  document.getElementById("tlOverlay").classList.add("open");
+}
+
+function renderTL(items) {
+  const ul = document.getElementById("tlList");
+  const cfg = TL_CONFIG[tlCurrentType];
+  document.getElementById("tlCount").textContent = items.length + " titre" + (items.length>1?"s":"");
+  if (!items.length) {
+    ul.innerHTML = "<li class='tl-empty'>Aucun titre pour l'instant</li>";
+    return;
+  }
+  ul.innerHTML = items.map((name, i) =>
+    `<li class="tl-item">
+       <span class="tl-num">${i+1}</span>
+       <span class="tl-dot ${cfg.dot}"></span>
+       <span>${escHtml(name)}</span>
+     </li>`
+  ).join("");
+}
+
+function filterTL() {
+  const q = document.getElementById("tlSearch").value.toLowerCase();
+  const filtered = trackLists[tlCurrentType].filter(n => n.toLowerCase().includes(q));
+  renderTL(filtered);
+}
+
+function closeTL() {
+  document.getElementById("tlOverlay").classList.remove("open");
+}
 
 function ts() {
   const d = new Date();
@@ -732,6 +866,7 @@ function startSSE() {
     if (msg.type === 'log') {
       appendLog(msg.text, msg.level);
       updateProgress(msg.done, msg.total, msg.ok, msg.skipped, msg.failed);
+      recordTrack(msg);
       if (msg.level === 'track') {
         const m = msg.text.match(/\[\d+\/\d+\]\s+(.*)/);
         if (m) document.getElementById('currentTrackText').textContent = m[1];
@@ -758,6 +893,7 @@ async function startDownload() {
 
   // Reset
   done_val = total_val = ok_val = skip_val = fail_val = 0;
+  resetTrackLists();
   document.getElementById('log').innerHTML = '';
   document.getElementById('bar').style.width = '0%';
   document.getElementById('doneBanner').classList.remove('visible');
