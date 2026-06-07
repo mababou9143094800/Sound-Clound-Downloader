@@ -68,14 +68,12 @@ def get_fresh_client_id() -> str | None:
     return None
 
 
-def resolve_url(url: str, client_id: str, token: str | None) -> dict:
+def resolve_url(url: str, client_id: str, token: str | None) -> dict | None:
     r = api_get(
         f"https://api-v2.soundcloud.com/resolve?url={url}&client_id={client_id}",
         token,
     )
-    if r is None:
-        raise RuntimeError("403 sur resolve_url")
-    return r.json()
+    return r.json() if r else None
 
 
 def fetch_playlist_tracks(playlist: dict, client_id: str, token: str | None) -> list[str]:
