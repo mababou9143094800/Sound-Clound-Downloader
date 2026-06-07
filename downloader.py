@@ -109,8 +109,13 @@ def fetch_playlist_tracks(playlist: dict, client_id: str, token: str | None) -> 
 
 
 def fetch_all_tracks(user_id: int, client_id: str, token: str | None) -> list[str]:
+    """Retourne les permalink_url de toutes les tracks du profil.
+    Inclut uploads, reposts de tracks, ET toutes les tracks des playlists."""
     urls: list[str] = []
     seen: set[str] = set()
+    pending_ids: list[str] = []
+    seen_ids: set[str] = set()
+
     next_href: str | None = (
         f"https://api-v2.soundcloud.com/stream/users/{user_id}"
         f"?client_id={client_id}&limit=200&linked_partitioning=1"
@@ -123,17 +128,61 @@ def fetch_all_tracks(user_id: int, client_id: str, token: str | None) -> list[st
         if r is None:
             raise RuntimeError("403 sur fetch_all_tracks")
         data = r.json()
+
         for item in data.get("collection", []):
+            # Track direct ou repost de track
             track = item.get("track") or (item if item.get("kind") == "track" else None)
             if track:
                 pu = track.get("permalink_url")
                 if pu and pu not in seen:
                     seen.add(pu)
                     urls.append(pu)
+                continue
+
+            # Playlist ou repost de playlist → on expanse toutes ses tracks
+            playlist = item.get("playlist") or (
+                item if item.get("kind") in ("playlist", "system-playlist") else None
+            )
+            if playlist:
+                pl_title = playlist.get("title", "?")
+                pl_count = playlist.get("track_count", "?")
+                print(f"\n  Playlist : {pl_title} ({pl_count} tracks)")
+                for t in playlist.get("tracks", []):
+                    pu = t.get("permalink_url")
+                    tid = str(t.get("id", ""))
+                    if pu:
+                        if pu not in seen:
+                            seen.add(pu)
+                            urls.append(pu)
+                    elif tid and tid not in seen_ids:
+                        seen_ids.add(tid)
+                        pending_ids.append(tid)
+
         next_href = data.get("next_href")
         if next_href and "client_id" not in next_href:
             next_href += f"&client_id={client_id}"
+
     print()
+
+    # Batch-fetch des tracks de playlists qui n'avaient que leur ID
+    if pending_ids:
+        print(f"  Recuperation metadata de {len(pending_ids)} tracks (depuis playlists)...")
+        for i in range(0, len(pending_ids), 50):
+            batch = pending_ids[i:i + 50]
+            r = api_get(
+                f"https://api-v2.soundcloud.com/tracks"
+                f"?ids={','.join(batch)}&client_id={client_id}",
+                token,
+            )
+            if r:
+                for t in r.json():
+                    pu = t.get("permalink_url")
+                    if pu and pu not in seen:
+                        seen.add(pu)
+                        urls.append(pu)
+            time.sleep(0.5)
+        print(f"  Total apres expansion des playlists : {len(urls)} tracks")
+
     return urls
 
 
