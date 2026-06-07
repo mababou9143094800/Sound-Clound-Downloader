@@ -68,14 +68,44 @@ def get_fresh_client_id() -> str | None:
     return None
 
 
-def resolve_user(url: str, client_id: str, token: str | None) -> dict:
+def resolve_url(url: str, client_id: str, token: str | None) -> dict:
     r = api_get(
         f"https://api-v2.soundcloud.com/resolve?url={url}&client_id={client_id}",
         token,
     )
     if r is None:
-        raise RuntimeError("403 sur resolve_user")
+        raise RuntimeError("403 sur resolve_url")
     return r.json()
+
+
+def fetch_playlist_tracks(playlist: dict, client_id: str, token: str | None) -> list[str]:
+    """Retourne les permalink_url de toutes les tracks d'une playlist."""
+    tracks = playlist.get("tracks", [])
+    urls: list[str] = []
+    ids_a_charger: list[str] = []
+
+    for t in tracks:
+        pu = t.get("permalink_url")
+        if pu:
+            urls.append(pu)
+        elif t.get("id"):
+            ids_a_charger.append(str(t["id"]))
+
+    # Certaines tracks n'ont que l'id — on les recupere par batch de 50
+    for i in range(0, len(ids_a_charger), 50):
+        batch = ids_a_charger[i:i + 50]
+        r = api_get(
+            f"https://api-v2.soundcloud.com/tracks?ids={','.join(batch)}&client_id={client_id}",
+            token,
+        )
+        if r:
+            for t in r.json():
+                pu = t.get("permalink_url")
+                if pu:
+                    urls.append(pu)
+        time.sleep(0.5)
+
+    return urls
 
 
 def fetch_all_tracks(user_id: int, client_id: str, token: str | None) -> list[str]:
@@ -250,7 +280,7 @@ def run(url: str, output: Path, token: str | None, client_id: str | None, fmt: s
         "flac": "FLAC",
         "wav": "WAV (256kbps AAC source avec Go+)",
     }
-    print(f"Profil  : {url}")
+    print(f"URL     : {url}")
     print(f"Format  : {fmt_labels.get(fmt, fmt)}")
     print(f"Dossier : {output.resolve()}")
     print(f"Token   : {'OK' if token else 'ABSENT'}")
@@ -266,18 +296,38 @@ def run(url: str, output: Path, token: str | None, client_id: str | None, fmt: s
             sys.exit(1)
     print(f"client_id : {client_id}")
 
-    # Resolve user
+    # Resolve URL (profil, playlist, track...)
     print("Connexion a l'API SoundCloud...")
     try:
-        user = resolve_user(url, client_id, token)
+        resolved = resolve_url(url, client_id, token)
     except Exception as e:
         print(f"Erreur ({e}), nouveau client_id...")
         client_id = get_fresh_client_id() or client_id
-        user = resolve_user(url, client_id, token)
+        resolved = resolve_url(url, client_id, token)
 
-    print(f"Profil trouve : {user.get('username')} (id={user['id']})")
-    print("Recuperation des tracks (uploads + reposts)...")
-    track_urls = fetch_all_tracks(user["id"], client_id, token)
+    kind = resolved.get("kind", "")
+
+    if kind == "user":
+        print(f"Profil trouve : {resolved.get('username')} (id={resolved['id']})")
+        print("Recuperation des tracks (uploads + reposts)...")
+        track_urls = fetch_all_tracks(resolved["id"], client_id, token)
+
+    elif kind in ("playlist", "system-playlist"):
+        title = resolved.get("title", "?")
+        count = resolved.get("track_count", "?")
+        print(f"Playlist trouvee : {title} ({count} tracks)")
+        print("Recuperation des tracks...")
+        track_urls = fetch_playlist_tracks(resolved, client_id, token)
+
+    elif kind == "track":
+        print(f"Track trouvee : {resolved.get('title')}")
+        track_urls = [resolved.get("permalink_url")]
+
+    else:
+        print(f"ERREUR : type non reconnu ({kind!r})")
+        print("Fournissez l'URL d'un profil, d'une playlist ou d'une track.")
+        sys.exit(1)
+
     print(f"{len(track_urls)} track(s) trouvee(s)\n{'-'*50}")
 
     archive_set = load_archive(archive)

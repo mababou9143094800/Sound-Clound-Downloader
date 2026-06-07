@@ -553,8 +553,8 @@ select option{background:#1a1a1a;color:var(--text)}
   <div class="card-title">Configuration</div>
 
   <div class="form-group">
-    <label>URL du profil SoundCloud</label>
-    <input id="url" type="url" placeholder="https://soundcloud.com/leap1" value="https://soundcloud.com/leap1">
+    <label>URL SoundCloud — profil, playlist ou track</label>
+    <input id="url" type="url" placeholder="https://soundcloud.com/artiste  ou  /artiste/sets/ma-playlist" value="https://soundcloud.com/leap1">
   </div>
 
   <div class="form-group">
