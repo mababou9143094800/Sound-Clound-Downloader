@@ -36,8 +36,8 @@ def api_get(url: str, token: str | None, **kwargs):
             print(f"  429 rate-limit, attente {wait}s...")
             time.sleep(wait)
             continue
-        if r.status_code == 403:
-            return None  # signale 403 sans exception
+        if r.status_code in (403, 404):
+            return None  # 404 = client_id invalide/expire ou URL inexistante
         r.raise_for_status()
         return r
     return None
@@ -364,12 +364,27 @@ def run(url: str, output: Path, token: str | None, client_id: str | None, fmt: s
 
     # Resolve URL (profil, playlist, track...)
     print("Connexion a l'API SoundCloud...")
-    try:
-        resolved = resolve_url(url, client_id, token)
-    except Exception as e:
-        print(f"Erreur ({e}), nouveau client_id...")
-        client_id = get_fresh_client_id() or client_id
-        resolved = resolve_url(url, client_id, token)
+    resolved = resolve_url(url, client_id, token)
+
+    # Si echec (client_id expire = 404/403), tente un refresh
+    if resolved is None:
+        print("client_id invalide ou expire — tentative de refresh...")
+        new_id = get_fresh_client_id()
+        if new_id and new_id != client_id:
+            client_id = new_id
+            print(f"Nouveau client_id : {client_id}")
+            resolved = resolve_url(url, client_id, token)
+
+    if resolved is None:
+        print()
+        print("ERREUR : impossible de contacter l'API SoundCloud.")
+        print("Le client_id est probablement expire. Recuperes-en un nouveau :")
+        print("  1. Ouvre soundcloud.com dans ton navigateur")
+        print("  2. Appuie sur F12 > onglet Network")
+        print("  3. Lance une musique")
+        print("  4. Dans les requetes, cherche '?client_id='")
+        print("  5. Relance avec --client-id TON_NOUVEAU_CLIENT_ID")
+        sys.exit(1)
 
     kind = resolved.get("kind", "")
 
